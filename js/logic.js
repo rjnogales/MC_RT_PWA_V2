@@ -95,12 +95,19 @@ function agruparPrediccionesPorRuta(predicciones, stopId, now, caches) {
             caches.approachingCache[g.key] = currentNext;
         }
 
-        // v2: acumula TODAS las predicciones que el SIC ya dio como pasadas para esta ruta (no
-        // solo la más reciente, que es lo que guarda historyCache/lastDeparted) -- es la materia
-        // prima de la lista "pendientes de captura" (ver app.js: ahí se filtra contra lo que el
-        // auditor ya marcó con AUDITORIA_HORA). Se deduplica por tripId para no repetir el mismo
-        // viaje ciclo a ciclo; una predicción pasada sin tripId no se puede rastrear de forma
-        // confiable entre ciclos y se deja fuera de esta cola.
+        // v2: acumula los viajes de esta ruta que el SIC ya da por llegados -- materia prima de
+        // la lista "pendientes de captura" (ver app.js: ahí se filtra contra lo que el auditor ya
+        // marcó con AUDITORIA_HORA). No alcanza con mirar solo las filas con `eta < now`: un bus
+        // muy atrasado puede desaparecer de las predicciones de un ciclo a otro SIN pasar nunca
+        // por ese estado visible (el SIC simplemente deja de mandarlo, para él "ya llegó") --
+        // depender solo de eso es asumir que el SIC siempre va a avisar, y no es así. Por eso hay
+        // dos señales, igual de válidas:
+        //   1. señal explícita: una predicción que el propio SIC ya marca con ETA pasado.
+        //   2. señal inferida (mismo truco que ya usaba historyCache/approachingCache para
+        //      Última Atención, generalizado a TODOS los vehículos de la ruta, no solo al de
+        //      "Próxima Llegada"): un viaje que se veía en el ciclo anterior y que en este ciclo
+        //      ya no aparece en ninguna predicción de esta ruta, ni pasada ni futura.
+        // Se deduplica por tripId; sin tripId no se puede rastrear entre ciclos y queda fuera.
         if (!caches.colaPasados) caches.colaPasados = {};
         if (!caches.colaPasados[g.key]) caches.colaPasados[g.key] = new Map();
         for (const p of past) {
@@ -109,6 +116,20 @@ function agruparPrediccionesPorRuta(predicciones, stopId, now, caches) {
                 caches.colaPasados[g.key].set(tid, p);
             }
         }
+
+        const vistosAhora = new Map();
+        for (const p of g.predicciones) {
+            const tid = (p.tripId !== null && p.tripId !== undefined) ? String(p.tripId) : null;
+            if (tid !== null) vistosAhora.set(tid, p);
+        }
+        if (!caches.vistosAnteriores) caches.vistosAnteriores = {};
+        const vistosAntes = caches.vistosAnteriores[g.key] || new Map();
+        for (const [tid, prediccionAnterior] of vistosAntes) {
+            if (!vistosAhora.has(tid) && !caches.colaPasados[g.key].has(tid)) {
+                caches.colaPasados[g.key].set(tid, prediccionAnterior);
+            }
+        }
+        caches.vistosAnteriores[g.key] = vistosAhora;
 
         resultado.push({
             route: g.route,
