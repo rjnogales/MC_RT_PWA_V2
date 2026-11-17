@@ -537,12 +537,13 @@ function renderGpsTexto(slot, esPasado, now) {
     return `<small class="gps-eta${discrepa ? ' discrepa' : ''}">GPS: ${slot.etaGpsMin} min</small>`;
 }
 
-function renderDistTexto(slot) {
+function renderDistTexto(slot, compacta) {
     const d = slot?.distanciaMetros;
     if (d === null || d === undefined) return '';
     const texto = d >= 1000 ? `~${(d / 1000).toFixed(1)} km` : `~${d} m`;
     const llego = d <= UMBRAL_LLEGADA_M;
-    return `<small class="dist-gps${llego ? ' llego' : ''}">${texto} en línea recta</small>`;
+    const sufijo = compacta ? '' : ' en línea recta';
+    return `<small class="dist-gps${llego ? ' llego' : ''}">${texto}${sufijo}</small>`;
 }
 
 // Consulta el SIC y sincroniza el reloj SIEMPRE que haya una plataforma seleccionada, haya o
@@ -694,8 +695,11 @@ function renderPendientes(r, now) {
     const items = faltantes.map(p => {
         const t = formatearTiempo(p.eta, now, true); // esPasado=true -> "hace X min"
         const id = p.vehicleMc;
-        const gps = renderGpsTexto(p, true, now); // esPasado=true: discrepa si SIUR aun marca minutos para llegar
-        return `<div class="pendiente-item"><span class="pend-tiempo ${t.estado}">hace ${t.texto}</span><span class="pend-id">${id}</span>${gps}<button class="btn-auditar-pendiente" data-route="${r.route}" data-destino="${r.destination}" data-trip="${p.tripId}">Auditar</button></div>`;
+        // esPasado=true: discrepa si SIUR aun marca minutos para llegar. SIUR solo da conteo para
+        // los 5 buses mas cercanos a la parada -- si este no esta entre esos 5, no hay etaGpsMin
+        // y se cae a la distancia en linea recta (ya calculada por el seguimiento persistente).
+        const gpsOTexto = renderGpsTexto(p, true, now) || renderDistTexto(p, true);
+        return `<div class="pendiente-item"><span class="pend-tiempo ${t.estado}">hace ${t.texto}</span><span class="pend-id">${id}</span>${gpsOTexto}<button class="btn-auditar-pendiente" data-route="${r.route}" data-destino="${r.destination}" data-trip="${p.tripId}">Auditar</button></div>`;
     }).join('');
     return `<div class="pendientes-list">${items}</div>`;
 }
