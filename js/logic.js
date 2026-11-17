@@ -95,14 +95,27 @@ function agruparPrediccionesPorRuta(predicciones, stopId, now, caches) {
             caches.approachingCache[g.key] = currentNext;
         }
 
+        // v2: acumula TODAS las predicciones que el SIC ya dio como pasadas para esta ruta (no
+        // solo la más reciente, que es lo que guarda historyCache/lastDeparted) -- es la materia
+        // prima de la lista "pendientes de captura" (ver app.js: ahí se filtra contra lo que el
+        // auditor ya marcó con AUDITORIA_HORA). Se deduplica por tripId para no repetir el mismo
+        // viaje ciclo a ciclo; una predicción pasada sin tripId no se puede rastrear de forma
+        // confiable entre ciclos y se deja fuera de esta cola.
+        if (!caches.colaPasados) caches.colaPasados = {};
+        if (!caches.colaPasados[g.key]) caches.colaPasados[g.key] = new Map();
+        for (const p of past) {
+            const tid = (p.tripId !== null && p.tripId !== undefined) ? String(p.tripId) : null;
+            if (tid !== null && !caches.colaPasados[g.key].has(tid)) {
+                caches.colaPasados[g.key].set(tid, p);
+            }
+        }
+
         resultado.push({
             route: g.route,
             destination: g.destination,
             lastDeparted: caches.historyCache[g.key] || null,
             nextArrival: currentNext,
-            // v2: antes solo se guardaba el siguiente bus (future[1]); ahora se conserva toda la
-            // cola restante para la lista con scroll que reemplaza la columna "Siguiente".
-            pendientes: future.slice(1)
+            pasados: Array.from(caches.colaPasados[g.key].values())
         });
     }
 

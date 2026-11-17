@@ -41,6 +41,9 @@ let seguimientoVehiculos = {};
 // no se muestra el dato que infiere el propio SIC en "Última Atención" (puede estar adelantado
 // si el bus viene atrasado), se muestra esto.
 let llegadasReales = {};
+// v2: tripId (string) de todo bus que ya recibió AUDITORIA_HORA en esta sesión -- es lo que
+// separa "pendiente de captura" (ver renderPendientes) de "ya capturado".
+let tripsAuditados = new Set();
 let auditSeleccion = null; // { route, destination, tripId, vehicleMc, marcada:{} }
 let ultimoPollExitosoMs = null; // Date.now() del último fetchStopMessages que sí respondió -- ver actualizarPollEstadoUI
 let wakeLock = null; // sentinel del Screen Wake Lock, solo mientras hay sesión de captura activa
@@ -106,6 +109,7 @@ function poblarPlataformas(estacionNombre) {
     monitorCaches = { historyCache: {}, approachingCache: {} };
     seguimientoVehiculos = {};
     llegadasReales = {};
+    tripsAuditados = new Set();
     ultimoPollExitosoMs = null;
     if (session) {
         session.meta.lastStopId = currentStopId;
@@ -131,6 +135,7 @@ plataformaSelect.addEventListener('change', () => {
     monitorCaches = { historyCache: {}, approachingCache: {} };
     seguimientoVehiculos = {};
     llegadasReales = {};
+    tripsAuditados = new Set();
     ultimoPollExitosoMs = null;
     if (session) {
         session.meta.lastStopId = currentStopId;
@@ -462,7 +467,7 @@ async function obtenerCoordsParada(route, stopId) {
 // siguen en vivo siempre, igual que en v1.
 function slotsConVehiculo(row, incluirPendientes) {
     const base = [row.lastDeparted, row.nextArrival];
-    if (incluirPendientes) base.push(...(row.pendientes || []));
+    if (incluirPendientes) base.push(...(row.pasados || []));
     return base.filter(Boolean);
 }
 
@@ -515,9 +520,10 @@ async function actualizarSeguimientoVehiculos(rows, stopId, now) {
 }
 
 // ¿El conteo de SIUR (GPS: X min) se separa del que ya calcula el propio SIC para este slot?
-// - Slots futuros (Próxima Llegada / pendientes): se comparan los minutos restantes de ambos.
-// - Slot pasado (Última Atención, el SIC ya lo dio por llegado): cualquier conteo de SIUR mayor
-//   a la tolerancia es una contradicción real ("SIUR dice que todavía faltan X min").
+// - Slot futuro (Próxima Llegada): se comparan los minutos restantes de ambos.
+// - Slots pasados (Última Atención, y cada bus de la lista de pendientes de captura -- el SIC ya
+//   los dio por llegados): cualquier conteo de SIUR mayor a la tolerancia es una contradicción
+//   real ("SIUR dice que todavía faltan X min" cuando el SIC ya pasó ese bus a "llegado").
 function gpsDiscrepaDeSic(slot, esPasado, now) {
     if (!slot || slot.etaGpsMin === null || slot.etaGpsMin === undefined) return false;
     if (esPasado) return slot.etaGpsMin > TOLERANCIA_DISCREPANCIA_MIN;
@@ -581,8 +587,8 @@ async function pollTick() {
     const caches = session ? session.caches : monitorCaches;
     currentPlatformRows = agruparPrediccionesPorRuta(predicciones, currentStopId, now, caches);
     // v2: el conteo de SIUR se anexa a TODOS los slots con vehículo (Última Atención, Próxima
-    // Llegada y pendientes), no solo a Próxima Llegada -- así se puede comparar contra el SIC en
-    // cualquiera de los tres.
+    // Llegada y el backlog de pendientes de captura), no solo a Próxima Llegada -- así se puede
+    // comparar contra el SIC en cualquiera de los tres.
     for (const row of currentPlatformRows) {
         for (const slot of slotsConVehiculo(row, !!session)) {
             const minutos = gpsPorVehiculo[slot.vehicleRaw];
@@ -606,12 +612,12 @@ async function pollTick() {
         // Tipo 1 (predicciones): el SIC manda TODOS los viajes de cada ruta para la próxima hora
         // (30-50 por plataforma). Desde el 2026-11-13 (v1) solo se grababan próxima + siguiente +
         // pasadas + bus auditado, para no inflar el CSV (ver acta, sección 16).
-        // v2: la pantalla ahora muestra toda la cola de pendientes (ver pendientes-list), pero el
-        // CSV sigue acotado a propósito -- no se escribe una fila por cada uno de esos 10+ buses
-        // pendientes por ciclo. Se agrega solo lo que ya tiene valor real para la auditoría: la
-        // próxima llegada de cada ruta, lo ya pasado (fuente de Última Atención), y cualquier
-        // vehículo que esté en seguimiento persistente (seguimientoVehiculos) -- ese conjunto es
-        // chico y acotado por SEGUIMIENTO_EXPIRA_MS, no toda la cola de pendientes.
+        // v2: la pantalla ahora muestra el backlog de "pendientes de captura" (buses que el SIC ya
+        // dio por llegados y el auditor todavía no marcó, ver renderPendientes), pero el CSV sigue
+        // acotado a propósito -- no se escribe una fila por cada uno de esos buses por ciclo. Se
+        // agrega solo lo que ya tiene valor real para la auditoría: la próxima llegada de cada
+        // ruta, lo ya pasado (fuente de Última Atención), y cualquier vehículo que esté en
+        // seguimiento persistente (seguimientoVehiculos) -- acotado por SEGUIMIENTO_EXPIRA_MS.
         const vehiculosEnSeguimiento = new Set(Object.keys(seguimientoVehiculos));
         const visibles = new Set();
         for (const r of currentPlatformRows) {
@@ -666,20 +672,23 @@ function renderUltimaAtencion(r, now) {
     return `<span class="pasado">${texto}</span><small>${real.vehicleMc || ''}</small>${gps}`;
 }
 
+// v2 (corregido): "Pendientes" no es la cola futura del SIC -- es el backlog de buses que el
+// SIC YA dio por llegados (pasaron su ETA) en esta ruta, pero que el auditor todavía no capturó
+// con AUDITORIA_HORA (ver tripsAuditados). Solo tiene sentido con captura activa: sin sesión no
+// hay "auditor que deba capturar algo todavía", así que no se calcula ni se muestra nada.
 function renderPendientes(r, now) {
-    // La cola de pendientes solo se calcula y muestra con captura activa (ver
-    // actualizarSeguimientoVehiculos) -- Última Atención y Próxima Llegada siguen en vivo siempre.
     if (!session) {
         return '<p class="muted small">Se activa al iniciar la captura.</p>';
     }
-    if (!r.pendientes || !r.pendientes.length) {
-        return '<p class="muted small">Sin más buses pronosticados.</p>';
+    const faltantes = (r.pasados || []).filter(p => !tripsAuditados.has(String(p.tripId)));
+    if (!faltantes.length) {
+        return '<p class="muted small">Sin buses pendientes de captura.</p>';
     }
-    const items = r.pendientes.map(p => {
-        const t = formatearTiempo(p.eta, now, false);
+    const items = faltantes.map(p => {
+        const t = formatearTiempo(p.eta, now, true); // esPasado=true -> "hace X min"
         const id = p.vehicleMc ? p.vehicleMc : '<span class="sin-bus">sin bus</span>';
-        const gps = renderGpsTexto(p, false, now);
-        return `<div class="pendiente-item"><span class="pend-tiempo ${t.estado}">${t.texto}</span><span class="pend-id">${id}</span>${gps}</div>`;
+        const gps = renderGpsTexto(p, true, now); // esPasado=true: discrepa si SIUR aun marca minutos para llegar
+        return `<div class="pendiente-item"><span class="pend-tiempo ${t.estado}">hace ${t.texto}</span><span class="pend-id">${id}</span>${gps}</div>`;
     }).join('');
     return `<div class="pendientes-list">${items}</div>`;
 }
@@ -749,7 +758,7 @@ function actualizarPrediccionAuditoria() {
     // Atención" y promueve el siguiente bus a "Próxima Llegada". Si no se valida el tripId,
     // la pantalla (y el CSV) terminan mostrando el bus SIGUIENTE justo cuando el auditado
     // llega tarde -- que es el caso que esta auditoría más necesita medir bien.
-    const candidatos = [fila.nextArrival, fila.lastDeparted, ...(fila.pendientes || [])];
+    const candidatos = [fila.nextArrival, fila.lastDeparted, ...(fila.pasados || [])];
     const match = candidatos.find(c => c && (
         auditSeleccion.tripId !== null
             ? String(c.tripId) === String(auditSeleccion.tripId)
@@ -820,6 +829,10 @@ btnMarcarHora.addEventListener('click', () => {
         timestampMs: ahoraSincronizado(),
         vehicleMc: auditSeleccion.vehicleMc
     };
+    // v2: saca este trip del backlog de "pendientes de captura" -- ver renderPendientes.
+    if (auditSeleccion.tripId !== null && auditSeleccion.tripId !== undefined) {
+        tripsAuditados.add(String(auditSeleccion.tripId));
+    }
     actualizarResumenMarcas();
 });
 
