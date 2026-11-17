@@ -455,10 +455,15 @@ async function obtenerCoordsParada(route, stopId) {
     return null;
 }
 
-// Todos los slots con vehículo de una tarjeta (Última Atención, Próxima Llegada, y toda la cola
-// de pendientes) -- se usa tanto para alimentar seguimientoVehiculos como para pintar GPS/distancia.
-function slotsConVehiculo(row) {
-    return [row.lastDeparted, row.nextArrival, ...(row.pendientes || [])].filter(Boolean);
+// Todos los slots con vehículo de una tarjeta (Última Atención, Próxima Llegada, y, solo con
+// captura activa, toda la cola de pendientes) -- se usa tanto para alimentar
+// seguimientoVehiculos como para pintar GPS/distancia. La lista de pendientes queda apagada
+// (ver renderPendientes) mientras no hay sesión de captura -- Última Atención y Próxima Llegada
+// siguen en vivo siempre, igual que en v1.
+function slotsConVehiculo(row, incluirPendientes) {
+    const base = [row.lastDeparted, row.nextArrival];
+    if (incluirPendientes) base.push(...(row.pendientes || []));
+    return base.filter(Boolean);
 }
 
 // v2: seguimiento persistente por vehículo (no solo el de "Próxima Llegada" de cada ruta, como
@@ -467,8 +472,9 @@ function slotsConVehiculo(row) {
 // SEGUIMIENTO_EXPIRA_MS sin volver a aparecer, esté donde esté en la tarjeta (incluso ya en
 // Última Atención). Así se puede comparar lo que dice SIUR contra lo que el SIC ya dio por hecho.
 async function actualizarSeguimientoVehiculos(rows, stopId, now) {
+    const incluirPendientes = !!session;
     for (const row of rows) {
-        for (const slot of slotsConVehiculo(row)) {
+        for (const slot of slotsConVehiculo(row, incluirPendientes)) {
             if (!slot.vehicleRaw) continue;
             const previo = seguimientoVehiculos[slot.vehicleRaw];
             seguimientoVehiculos[slot.vehicleRaw] = {
@@ -500,7 +506,7 @@ async function actualizarSeguimientoVehiculos(rows, stopId, now) {
 
     // anexar a los slots de esta tarjeta para que renderizarCards tenga el dato ya calculado
     for (const row of rows) {
-        for (const slot of slotsConVehiculo(row)) {
+        for (const slot of slotsConVehiculo(row, incluirPendientes)) {
             const entry = seguimientoVehiculos[slot.vehicleRaw];
             slot.distanciaMetros = entry ? entry.distanciaMetros : null;
         }
@@ -578,7 +584,7 @@ async function pollTick() {
     // Llegada y pendientes), no solo a Próxima Llegada -- así se puede comparar contra el SIC en
     // cualquiera de los tres.
     for (const row of currentPlatformRows) {
-        for (const slot of slotsConVehiculo(row)) {
+        for (const slot of slotsConVehiculo(row, !!session)) {
             const minutos = gpsPorVehiculo[slot.vehicleRaw];
             slot.etaGpsMin = (minutos !== undefined) ? minutos : null;
         }
@@ -661,6 +667,11 @@ function renderUltimaAtencion(r, now) {
 }
 
 function renderPendientes(r, now) {
+    // La cola de pendientes solo se calcula y muestra con captura activa (ver
+    // actualizarSeguimientoVehiculos) -- Última Atención y Próxima Llegada siguen en vivo siempre.
+    if (!session) {
+        return '<p class="muted small">Se activa al iniciar la captura.</p>';
+    }
     if (!r.pendientes || !r.pendientes.length) {
         return '<p class="muted small">Sin más buses pronosticados.</p>';
     }
