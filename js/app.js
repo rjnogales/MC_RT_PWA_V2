@@ -665,7 +665,11 @@ function renderUltimaAtencion(r, now) {
     const real = llegadasReales[key];
     const gps = renderGpsTexto(r.lastDeparted, true, now); // SIUR puede seguir diciendo "no ha llegado" aunque no haya auditoría manual
     if (!real) {
-        return `<span class="sin-dato">—</span><small class="muted">sin llegada confirmada en campo todavía</small>${gps}`;
+        // sin auditoría manual todavía: el ID que se muestra es el del bus que el SIC infiere
+        // como "último que pasó" (lastDeparted) -- hace falta mostrarlo para saber a qué bus
+        // corresponde el GPS de al lado, si lo hay.
+        const idInferido = r.lastDeparted?.vehicleMc ? `<small>${r.lastDeparted.vehicleMc}</small>` : '';
+        return `<span class="sin-dato">—</span><small class="muted">sin llegada confirmada en campo todavía</small>${idInferido}${gps}`;
     }
     const elapsedMin = Math.max(0, Math.round((now - real.timestampMs) / 60000));
     const texto = elapsedMin <= 0 ? '< 1 min' : `${elapsedMin} min`;
