@@ -251,6 +251,16 @@ main {
 .pendiente-item .pend-tiempo.llegando { color: var(--no); }
 .pendiente-item .pend-id { flex: 1; color: #555; }
 .pendiente-item .gps-eta { font-size: 0.78rem; margin: 0; }
+.pendiente-item .btn-auditar-pendiente {
+    background: var(--brand-cyan);
+    color: white;
+    border: none;
+    border-radius: 5px;
+    padding: 3px 8px;
+    font-size: 0.72rem;
+    font-weight: bold;
+    cursor: pointer;
+}
 .tiempo-col p.muted.small { font-size: 0.75rem; }
 
 .muted {

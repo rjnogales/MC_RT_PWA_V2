@@ -688,7 +688,7 @@ function renderPendientes(r, now) {
         const t = formatearTiempo(p.eta, now, true); // esPasado=true -> "hace X min"
         const id = p.vehicleMc ? p.vehicleMc : '<span class="sin-bus">sin bus</span>';
         const gps = renderGpsTexto(p, true, now); // esPasado=true: discrepa si SIUR aun marca minutos para llegar
-        return `<div class="pendiente-item"><span class="pend-tiempo ${t.estado}">hace ${t.texto}</span><span class="pend-id">${id}</span>${gps}</div>`;
+        return `<div class="pendiente-item"><span class="pend-tiempo ${t.estado}">hace ${t.texto}</span><span class="pend-id">${id}</span>${gps}<button class="btn-auditar-pendiente" data-route="${r.route}" data-destino="${r.destination}" data-trip="${p.tripId}">Auditar</button></div>`;
     }).join('');
     return `<div class="pendientes-list">${items}</div>`;
 }
@@ -720,6 +720,9 @@ function renderizarCards(rows) {
     cardsEl.querySelectorAll('.btn-auditar').forEach(btn => {
         btn.addEventListener('click', () => seleccionarParaAuditar(btn.dataset.route, btn.dataset.destino));
     });
+    cardsEl.querySelectorAll('.btn-auditar-pendiente').forEach(btn => {
+        btn.addEventListener('click', () => seleccionarPendienteParaAuditar(btn.dataset.route, btn.dataset.destino, btn.dataset.trip));
+    });
 }
 
 function renderizarAlertas(alertas) {
@@ -743,6 +746,33 @@ function seleccionarParaAuditar(route, destination) {
         route, destination,
         tripId: fila.nextArrival.tripId,
         vehicleMc: fila.nextArrival.vehicleMc,
+        marcada: {}
+    };
+    renderizarAuditoria();
+    cambiarTab('auditoria');
+}
+
+// v2: audita un bus específico del backlog de "pendientes de captura" -- distinto de
+// seleccionarParaAuditar, que siempre toma el bus que está AHORA en "Próxima Llegada". Sin esto,
+// no hay forma de marcar la hora de un bus que el SIC ya movió al backlog (porque empezó a
+// predecir otro como próximo): tocar "Auditar" de la tarjeta audita ese otro bus nuevo, nunca el
+// de la lista, y el de la lista se queda ahí para siempre aunque el auditor sí lo haya visto
+// llegar (bug encontrado en campo 2026-11-17, bus MC 11025).
+function seleccionarPendienteParaAuditar(route, destination, tripId) {
+    if (!session) {
+        alert('Primero tenés que iniciar la captura (botón del encabezado) para poder auditar un bus.');
+        return;
+    }
+    const fila = currentPlatformRows.find(r => r.route === route && r.destination === destination);
+    const item = fila && (fila.pasados || []).find(p => String(p.tripId) === String(tripId));
+    if (!item) {
+        alert('Ese bus ya no está en la lista de pendientes (puede que ya se haya confirmado desde otro lado).');
+        return;
+    }
+    auditSeleccion = {
+        route, destination,
+        tripId: item.tripId,
+        vehicleMc: item.vehicleMc,
         marcada: {}
     };
     renderizarAuditoria();
