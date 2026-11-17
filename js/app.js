@@ -663,11 +663,12 @@ function renderVehiculoSlot(slot) {
 function renderUltimaAtencion(r, now) {
     const key = `${r.route}|${r.destination}`;
     const real = llegadasReales[key];
-    const gps = renderGpsTexto(r.lastDeparted, true, now); // SIUR puede seguir diciendo "no ha llegado" aunque no haya auditoría manual
+    // El conteo de SIUR se indexa por el código crudo del vehículo, no por el número físico
+    // resuelto -- puede existir aunque el bus que el SIC infiere como "último que pasó" nunca
+    // tuvo un vehículo asignado (candidato a fantasma, igual que en Pendientes). Sin vehicleMc no
+    // hay con qué identificarlo, así que no se muestra ni el ID ni el GPS suelto.
+    const gps = r.lastDeparted?.vehicleMc ? renderGpsTexto(r.lastDeparted, true, now) : '';
     if (!real) {
-        // sin auditoría manual todavía: el ID que se muestra es el del bus que el SIC infiere
-        // como "último que pasó" (lastDeparted) -- hace falta mostrarlo para saber a qué bus
-        // corresponde el GPS de al lado, si lo hay.
         const idInferido = r.lastDeparted?.vehicleMc ? `<small>${r.lastDeparted.vehicleMc}</small>` : '';
         return `<span class="sin-dato">—</span><small class="muted">sin llegada confirmada en campo todavía</small>${idInferido}${gps}`;
     }
