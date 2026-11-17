@@ -540,6 +540,14 @@ function renderGpsTexto(slot, esPasado, now) {
     return `<small class="gps-eta${discrepa ? ' discrepa' : ''}">GPS: ${slot.etaGpsMin} min</small>`;
 }
 
+// Mismo dato que renderGpsTexto (minutos de buses_proximos_a_llegar.php), sin el prefijo "GPS:" --
+// para Pendientes, donde el usuario pidió el valor plano, sin ninguna palabra calificadora.
+function renderTiempoPlano(slot, esPasado, now) {
+    if (!slot || slot.etaGpsMin === null || slot.etaGpsMin === undefined) return '';
+    const discrepa = gpsDiscrepaDeSic(slot, esPasado, now);
+    return `<small class="gps-eta${discrepa ? ' discrepa' : ''}">${slot.etaGpsMin} min</small>`;
+}
+
 function renderDistTexto(slot, compacta) {
     const d = slot?.distanciaMetros;
     if (d === null || d === undefined) return '';
@@ -708,14 +716,22 @@ function renderPendientes(r, now) {
     if (!faltantes.length) {
         return '<p class="muted small">Sin buses pendientes de captura.</p>';
     }
+    // Orden por cuánto hace que el SIC lo descartó (sin mostrarlo) -- el más viejo primero, que
+    // es el más urgente de revisar.
+    faltantes.sort((a, b) => (a.eta ?? 0) - (b.eta ?? 0));
     const items = faltantes.map(p => {
-        const t = formatearTiempo(p.eta, now, true); // esPasado=true -> "hace X min"
         const id = p.vehicleMc;
-        // esPasado=true: discrepa si SIUR aun marca minutos para llegar. SIUR solo da conteo para
-        // los 5 buses mas cercanos a la parada -- si este no esta entre esos 5, no hay etaGpsMin
-        // y se cae a la distancia en linea recta (ya calculada por el seguimiento persistente).
-        const gpsOTexto = renderGpsTexto(p, true, now) || renderDistTexto(p, true);
-        return `<div class="pendiente-item"><span class="pend-tiempo ${t.estado}">hace ${t.texto}</span><span class="pend-id">${id}</span>${gpsOTexto}<button class="btn-auditar-pendiente" data-route="${r.route}" data-destino="${r.destination}" data-trip="${p.tripId}">Auditar</button></div>`;
+        // Lo único útil en campo es esto: ¿se está acercando de verdad o no? "hace cuánto el SIC
+        // lo descartó" no sirve para nada en vivo (ya queda en el CSV para analizar después, ver
+        // usuario 2026-11-17) -- lo que importa es el tiempo/distancia que SIUR da AHORA, los dos
+        // juntos, no uno reemplazando al otro: el tiempo sale de buses_proximos_a_llegar.php
+        // (fuente "1"), solo para los 5 buses mas cercanos a la parada -- si este no esta entre
+        // esos 5 no hay tiempo. La distancia sale de bus.php (fuente "3", lat/lon) vía
+        // seguimientoVehiculos. Sin palabras como "GPS" o "hace" -- solo el numero.
+        const tiempoTexto = renderTiempoPlano(p, true, now);
+        const distTexto = renderDistTexto(p, true);
+        const sinDato = (!tiempoTexto && !distTexto) ? '<small class="muted">sin dato de SIUR</small>' : '';
+        return `<div class="pendiente-item"><span class="pend-id">${id}</span>${tiempoTexto}${distTexto}${sinDato}<button class="btn-auditar-pendiente" data-route="${r.route}" data-destino="${r.destination}" data-trip="${p.tripId}">Auditar</button></div>`;
     }).join('');
     return `<div class="pendientes-list">${items}</div>`;
 }
