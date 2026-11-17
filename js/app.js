@@ -460,13 +460,13 @@ async function obtenerCoordsParada(route, stopId) {
     return null;
 }
 
-// Todos los slots con vehículo de una tarjeta (Última Atención, Próxima Llegada, y, solo con
-// captura activa, toda la cola de pendientes) -- se usa tanto para alimentar
-// seguimientoVehiculos como para pintar GPS/distancia. La lista de pendientes queda apagada
-// (ver renderPendientes) mientras no hay sesión de captura -- Última Atención y Próxima Llegada
-// siguen en vivo siempre, igual que en v1.
+// Todos los slots con vehículo que SÍ se muestran en pantalla (Próxima Llegada siempre, y, solo
+// con captura activa, la cola de pendientes) -- se usa tanto para alimentar seguimientoVehiculos
+// como para pintar GPS/distancia. lastDeparted queda afuera a propósito: ya no se muestra nada
+// de él en la UI (ver renderUltimaAtencion), así que pedirle GPS/distancia sería trabajo
+// desperdiciado. La lista de pendientes queda apagada mientras no hay sesión de captura.
 function slotsConVehiculo(row, incluirPendientes) {
-    const base = [row.lastDeparted, row.nextArrival];
+    const base = [row.nextArrival];
     if (incluirPendientes) base.push(...(row.pasados || []));
     return base.filter(Boolean);
 }
@@ -656,26 +656,20 @@ function renderVehiculoSlot(slot) {
     return '<small class="sin-bus">sin bus asignado</small>';
 }
 
-// v2: "Última Atención" ya no muestra el dato que infiere el propio SIC (puede estar
-// adelantado si el bus viene atrasado y el sistema ya pasó a predecir el siguiente trip, ver
-// acta §8 16-nov) -- muestra el último bus que el auditor realmente confirmó en esta ruta
-// durante la sesión, y cuánto hace. Si todavía no se audita ninguno en esta ruta, queda vacío
-// a propósito: no se inventa un dato que no es real.
+// v2 (simplificado, usuario 2026-11-17): Última Atención SOLO muestra la llegada real que el
+// auditor confirmó -- nada que el propio SIC infiera (ni su "último bus" adivinado, ni un GPS
+// suelto colgado de esa suposición). Mostrar un dato que no es una llegada confirmada es
+// justamente el tipo de "verdad fabricada" que este aplicativo existe para no cometer. Sin
+// auditoría real todavía para esta ruta, queda vacío, sin nada más.
 function renderUltimaAtencion(r, now) {
     const key = `${r.route}|${r.destination}`;
     const real = llegadasReales[key];
-    // El conteo de SIUR se indexa por el código crudo del vehículo, no por el número físico
-    // resuelto -- puede existir aunque el bus que el SIC infiere como "último que pasó" nunca
-    // tuvo un vehículo asignado (candidato a fantasma, igual que en Pendientes). Sin vehicleMc no
-    // hay con qué identificarlo, así que no se muestra ni el ID ni el GPS suelto.
-    const gps = r.lastDeparted?.vehicleMc ? renderGpsTexto(r.lastDeparted, true, now) : '';
     if (!real) {
-        const idInferido = r.lastDeparted?.vehicleMc ? `<small>${r.lastDeparted.vehicleMc}</small>` : '';
-        return `<span class="sin-dato">—</span><small class="muted">sin llegada confirmada en campo todavía</small>${idInferido}${gps}`;
+        return `<span class="sin-dato">—</span><small class="muted">sin llegada confirmada en campo todavía</small>`;
     }
     const elapsedMin = Math.max(0, Math.round((now - real.timestampMs) / 60000));
     const texto = elapsedMin <= 0 ? '< 1 min' : `${elapsedMin} min`;
-    return `<span class="pasado">${texto}</span><small>${real.vehicleMc || ''}</small>${gps}`;
+    return `<span class="pasado">${texto}</span><small>${real.vehicleMc || ''}</small>`;
 }
 
 // v2 (corregido): "Pendientes" no es la cola futura del SIC -- es el backlog de buses que el
