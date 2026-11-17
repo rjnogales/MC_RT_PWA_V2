@@ -85,51 +85,37 @@ function agruparPrediccionesPorRuta(predicciones, stopId, now, caches) {
         const currentNext = future[0] || null;
         const lastKnownNext = caches.approachingCache[g.key];
 
+        // v2: materia prima de la lista "pendientes de captura" (ver app.js) -- a propósito
+        // acotada al mismo alcance que ya usaba historyCache/approachingCache para Última
+        // Atención: SOLO el bus que en algún momento fue "Próxima Llegada" de esta ruta, nunca
+        // algo que todavía está a 20-40 min y ni siquiera es el próximo (ese bus puede atrasarse,
+        // cambiar, o nunca salir del patio -- no le importa a este aplicativo, que mide el SIC
+        // contra lo que el cliente de verdad ve y espera, no contra el programa completo de la
+        // hora siguiente). Dos señales, mismo alcance:
+        //   1. señal explícita: el SIC ya marca la predicción con ETA pasado.
+        //   2. señal inferida (lo que ya hacía historyCache): el bus que era "Próxima Llegada"
+        //      cambió o desapareció sin pasar nunca por el estado anterior.
+        // A diferencia de historyCache (que solo guarda el último), acá se acumulan todos los
+        // que todavía no tienen AUDITORIA_HORA -- pueden apilarse varios mientras el auditor está
+        // ocupado con otro bus. Se deduplica por tripId.
+        if (!caches.colaPasados) caches.colaPasados = {};
+        if (!caches.colaPasados[g.key]) caches.colaPasados[g.key] = new Map();
+        const agregarAColaPasados = (p) => {
+            const tid = (p.tripId !== null && p.tripId !== undefined) ? String(p.tripId) : null;
+            if (tid !== null && !caches.colaPasados[g.key].has(tid)) caches.colaPasados[g.key].set(tid, p);
+        };
+
         if (past.length > 0) {
             caches.historyCache[g.key] = past[0];
+            for (const p of past) agregarAColaPasados(p);
         } else if (lastKnownNext && (!currentNext || lastKnownNext.vehicleRaw !== currentNext.vehicleRaw || lastKnownNext.tripId !== currentNext.tripId)) {
             caches.historyCache[g.key] = lastKnownNext;
+            agregarAColaPasados(lastKnownNext);
         }
 
         if (currentNext) {
             caches.approachingCache[g.key] = currentNext;
         }
-
-        // v2: acumula los viajes de esta ruta que el SIC ya da por llegados -- materia prima de
-        // la lista "pendientes de captura" (ver app.js: ahí se filtra contra lo que el auditor ya
-        // marcó con AUDITORIA_HORA). No alcanza con mirar solo las filas con `eta < now`: un bus
-        // muy atrasado puede desaparecer de las predicciones de un ciclo a otro SIN pasar nunca
-        // por ese estado visible (el SIC simplemente deja de mandarlo, para él "ya llegó") --
-        // depender solo de eso es asumir que el SIC siempre va a avisar, y no es así. Por eso hay
-        // dos señales, igual de válidas:
-        //   1. señal explícita: una predicción que el propio SIC ya marca con ETA pasado.
-        //   2. señal inferida (mismo truco que ya usaba historyCache/approachingCache para
-        //      Última Atención, generalizado a TODOS los vehículos de la ruta, no solo al de
-        //      "Próxima Llegada"): un viaje que se veía en el ciclo anterior y que en este ciclo
-        //      ya no aparece en ninguna predicción de esta ruta, ni pasada ni futura.
-        // Se deduplica por tripId; sin tripId no se puede rastrear entre ciclos y queda fuera.
-        if (!caches.colaPasados) caches.colaPasados = {};
-        if (!caches.colaPasados[g.key]) caches.colaPasados[g.key] = new Map();
-        for (const p of past) {
-            const tid = (p.tripId !== null && p.tripId !== undefined) ? String(p.tripId) : null;
-            if (tid !== null && !caches.colaPasados[g.key].has(tid)) {
-                caches.colaPasados[g.key].set(tid, p);
-            }
-        }
-
-        const vistosAhora = new Map();
-        for (const p of g.predicciones) {
-            const tid = (p.tripId !== null && p.tripId !== undefined) ? String(p.tripId) : null;
-            if (tid !== null) vistosAhora.set(tid, p);
-        }
-        if (!caches.vistosAnteriores) caches.vistosAnteriores = {};
-        const vistosAntes = caches.vistosAnteriores[g.key] || new Map();
-        for (const [tid, prediccionAnterior] of vistosAntes) {
-            if (!vistosAhora.has(tid) && !caches.colaPasados[g.key].has(tid)) {
-                caches.colaPasados[g.key].set(tid, prediccionAnterior);
-            }
-        }
-        caches.vistosAnteriores[g.key] = vistosAhora;
 
         resultado.push({
             route: g.route,
