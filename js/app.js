@@ -502,7 +502,10 @@ async function actualizarSeguimientoVehiculos(rows, stopId, now) {
         if (!coords) return;
         const numeroDigits = entry.vehicleMc.replace(/^MC\s*/, '');
         let posBus;
-        try { posBus = await fetchBusPosicion(numeroDigits); } catch (e) { return; }
+        try { posBus = await fetchBusPosicion(numeroDigits); } catch (e) {
+            console.error('fetchBusPosicion fallo para', numeroDigits, e); // visible en DevTools -- no distinguir esto de "sin posicion" a ciegas
+            return;
+        }
         if (!posBus) return; // SIUR sin tarea/posición para este vehículo en este ciclo
         const metros = Math.round(haversineMetros(posBus.lat, posBus.lon, coords.lat, coords.lon));
         entry.distanciaMetros = metros;
@@ -546,11 +549,30 @@ function renderDistTexto(slot, compacta) {
     return `<small class="dist-gps${llego ? ' llego' : ''}">${texto}${sufijo}</small>`;
 }
 
+// v2: seguro contra ciclos de sondeo superpuestos -- si un ciclo (fetchStopMessages + SIUR +
+// actualizarSeguimientoVehiculos, cada vez más pesado mientras más buses hay en seguimiento) tarda
+// más de POLL_INTERVAL_MS en terminar, setInterval igual dispara el siguiente ciclo encima del
+// anterior. Dos ciclos mutando seguimientoVehiculos al mismo tiempo pueden pisarse: el segundo
+// reconstruye una entrada justo cuando el primero está por escribirle la distancia que sí llegó a
+// tiempo, y esa lectura se pierde en silencio (bug encontrado en campo 2026-11-17, bus MC 11020
+// nunca mostraba distancia aunque SIUR sí tenía su posición). Si hay un ciclo en curso, este se
+// salta -- no se encola, simplemente se espera al siguiente intervalo.
+let pollEnCurso = false;
+async function pollTick() {
+    if (pollEnCurso) return;
+    pollEnCurso = true;
+    try {
+        await pollTickInterno();
+    } finally {
+        pollEnCurso = false;
+    }
+}
+
 // Consulta el SIC y sincroniza el reloj SIEMPRE que haya una plataforma seleccionada, haya o
 // no sesión de captura activa -- Monitoreo (y el reloj del encabezado) deben verse en vivo todo
 // el tiempo, igual que la pantalla física del kiosco. El botón de captura solo controla si,
 // además de mostrarse, esos datos también se graban en el CSV de la sesión.
-async function pollTick() {
+async function pollTickInterno() {
     if (!currentStopId) return;
     const localAntes = Date.now();
     let messages;
