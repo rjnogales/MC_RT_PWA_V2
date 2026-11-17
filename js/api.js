@@ -16,8 +16,22 @@ const PARADAS_CACHE_KEY = 'sic_paradas_cache_v1';
 // (confirmado cruzando ambas respuestas para el mismo StopId/parada en el mismo instante).
 const SIUR_BASE = 'https://servicios.siur.com.co/buscarutas/api';
 
+// v2: límite de tiempo para toda petición de red -- sin esto, un fetch que se queda colgado (el
+// servidor no responde ni da error) nunca resuelve su promesa, y como pollTick ahora tiene un
+// seguro de re-entrancia (ver app.js, pollEnCurso), un solo fetch colgado congelaba la app
+// entera para siempre (bug encontrado en campo 2026-11-17, justo después de agregar ese seguro).
+async function fetchConTimeout(url, opciones, timeoutMs = 8000) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        return await fetch(url, { ...opciones, signal: controller.signal });
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
 async function fetchBusesProximosGps(stopId) {
-    const res = await fetch(`${SIUR_BASE}/buses_proximos_a_llegar.php?parada=${encodeURIComponent(stopId)}`, { cache: 'no-store' });
+    const res = await fetchConTimeout(`${SIUR_BASE}/buses_proximos_a_llegar.php?parada=${encodeURIComponent(stopId)}`, { cache: 'no-store' });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
     return Array.isArray(data?.buses) ? data.buses : [];
@@ -35,7 +49,7 @@ function parseCuentaRegresivaMin(texto) {
 // para sacar su lat/lon (ver obtenerCoordsParada en app.js, que cachea el resultado porque las
 // coordenadas de una parada no cambian).
 async function fetchParadasDeRuta(route) {
-    const res = await fetch(`${SIUR_BASE}/paradas.php?linea=${encodeURIComponent(route)}`, { cache: 'no-store' });
+    const res = await fetchConTimeout(`${SIUR_BASE}/paradas.php?linea=${encodeURIComponent(route)}`, { cache: 'no-store' });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
     return Array.isArray(data) ? data : [];
@@ -43,7 +57,7 @@ async function fetchParadasDeRuta(route) {
 
 // Posición GPS en vivo de un bus físico específico (numeroBus = los dígitos de "MC XXXXX", sin el prefijo).
 async function fetchBusPosicion(numeroBus) {
-    const res = await fetch(`${SIUR_BASE}/bus.php?numeroBus=${encodeURIComponent(numeroBus)}`, { cache: 'no-store' });
+    const res = await fetchConTimeout(`${SIUR_BASE}/bus.php?numeroBus=${encodeURIComponent(numeroBus)}`, { cache: 'no-store' });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
     if (!data || data.latitud === undefined || data.longitud === undefined) return null;
@@ -71,7 +85,7 @@ function buildStopUrl(stopId) {
 // Devuelve el texto crudo de la respuesta (una línea JSON-array por mensaje) ya separado en array de arrays.
 // No descarta ninguna línea, ni siquiera las que no logre parsear (se devuelven como {parseError:true, texto}).
 async function fetchStopMessages(stopId) {
-    const res = await fetch(buildStopUrl(stopId), { cache: 'no-store' });
+    const res = await fetchConTimeout(buildStopUrl(stopId), { cache: 'no-store' });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const text = await res.text();
     return text.split('\n')
@@ -98,7 +112,7 @@ function extraerTimestampServidor(messages) {
 // funciona, se cachea y se usa esa versión más nueva.
 async function loadParadas() {
     try {
-        const res = await fetch(PARADAS_URL, { cache: 'no-store' });
+        const res = await fetchConTimeout(PARADAS_URL, { cache: 'no-store' });
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const data = await res.json();
         localStorage.setItem(PARADAS_CACHE_KEY, JSON.stringify(data));
