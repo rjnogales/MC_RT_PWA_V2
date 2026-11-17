@@ -684,13 +684,15 @@ function renderPendientes(r, now) {
     if (!session) {
         return '<p class="muted small">Se activa al iniciar la captura.</p>';
     }
-    const faltantes = (r.pasados || []).filter(p => !tripsAuditados.has(String(p.tripId)));
+    // Un viaje sin vehicleMc nunca tuvo un bus físico asignado (candidato a "fantasma", ver acta
+    // §2) -- no hay nada que un auditor pueda confirmar ahí, así que no entra a este backlog.
+    const faltantes = (r.pasados || []).filter(p => p.vehicleMc && !tripsAuditados.has(String(p.tripId)));
     if (!faltantes.length) {
         return '<p class="muted small">Sin buses pendientes de captura.</p>';
     }
     const items = faltantes.map(p => {
         const t = formatearTiempo(p.eta, now, true); // esPasado=true -> "hace X min"
-        const id = p.vehicleMc ? p.vehicleMc : '<span class="sin-bus">sin bus</span>';
+        const id = p.vehicleMc;
         const gps = renderGpsTexto(p, true, now); // esPasado=true: discrepa si SIUR aun marca minutos para llegar
         return `<div class="pendiente-item"><span class="pend-tiempo ${t.estado}">hace ${t.texto}</span><span class="pend-id">${id}</span>${gps}<button class="btn-auditar-pendiente" data-route="${r.route}" data-destino="${r.destination}" data-trip="${p.tripId}">Auditar</button></div>`;
     }).join('');
