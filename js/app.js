@@ -10,11 +10,6 @@ const SESSION_WARN_MAX_MIN = 180; // tope de avisos -- de ahí en adelante el co
 // distancia en línea recta se pinta rojo ("ya está en la ventana de llegada"), no es un valor
 // nuevo inventado para el PWA.
 const UMBRAL_LLEGADA_M = 100;
-// v2 (2026-11-17): "Próxima Llegada 2" -- tiempo calculado SOLO a partir de la distancia GPS en
-// línea recta, independiente de la hora que da el SIC y del conteo que da SIUR. 1 minuto por
-// cada 150 m, sin suavizar entre ciclos (si una lectura salta de 500 a 12 m de una vez se toma
-// tal cual -- 15 s ya es tiempo de sobra para que un bus recorra eso, según el usuario).
-const METROS_POR_MINUTO_CALCULADO = 150;
 // Tolerancia al comparar el conteo de SIUR (GPS: X min) contra el conteo propio del SIC: el
 // redondeo de SIUR a minutos enteros ya mete ±1 min de ruido normal (ver acta §3), así que solo
 // se marca en rojo si la diferencia supera eso.
@@ -50,7 +45,7 @@ let llegadasReales = {};
 // separa "pendiente de captura" (ver renderPendientes) de "ya capturado".
 let tripsAuditados = new Set();
 let auditSeleccion = null; // { route, destination, tripId, vehicleMc, marcada:{} }
-let ultimoPollExitosoMs = null; // Date.now() del último fetchStopMessages que sí respondió -- ver actualizarRelojUI
+let ultimoPollExitosoMs = null; // Date.now() del último fetchStopMessages que sí respondió -- ver actualizarPollEstadoUI
 let wakeLock = null; // sentinel del Screen Wake Lock, solo mientras hay sesión de captura activa
 
 // --- referencias DOM ---
@@ -61,6 +56,7 @@ const sessionStatusEl = document.getElementById('sessionStatus');
 const sessionTimerEl = document.getElementById('sessionTimer');
 const sessionTimerBannerEl = document.getElementById('sessionTimerBanner');
 const relojEstadoEl = document.getElementById('relojEstado');
+const pollEstadoEl = document.getElementById('pollEstado');
 const alertBannerEl = document.getElementById('alertBanner');
 const cardsEl = document.getElementById('cards');
 const sessionsArchiveEl = document.getElementById('sessionsArchive');
@@ -73,7 +69,6 @@ const btnIdentidadNo = document.getElementById('btnIdentidadNo');
 const busFisicoWrapEl = document.getElementById('busFisicoWrap');
 const numeroBusFisicoInput = document.getElementById('numeroBusFisico');
 const btnGuardarBusFisico = document.getElementById('btnGuardarBusFisico');
-const btnOcultarPendiente = document.getElementById('btnOcultarPendiente');
 const btnVolverMonitoreo = document.getElementById('btnVolverMonitoreo');
 const startSessionDialog = document.getElementById('startSessionDialog');
 const startSessionForm = document.getElementById('startSessionForm');
@@ -231,40 +226,34 @@ function renderizarSesionesArchivadas() {
     });
 }
 
-// --- reloj sincronizado + estado del SIC (encabezado, una sola línea) ---
-// v2 (2026-11-17): antes eran dos líneas (#relojEstado y #pollEstado) -- se piden juntas acá para
-// ganar una línea de pantalla. "Sincroniza" es el desfase del reloj del dispositivo contra el
-// reloj del servidor del SIC (ver js/reloj.js); "SIC" es hace cuánto respondió el último poll
-// exitoso (ver pollTickInterno) -- son dos cosas distintas (un reloj corriendo no prueba que el
-// polling esté vivo), por eso se muestran separadas aunque compartan línea.
+// --- reloj sincronizado (encabezado) ---
+// Muestra la hora corregida al reloj del sistema (ver js/reloj.js) y, si ya hay datos para
+// calcularlo, el desfase detectado contra el reloj del dispositivo -- así el auditor ve de un
+// vistazo si su dispositivo está confiable o no.
 function actualizarRelojUI() {
     const ahora = new Date(ahoraSincronizado());
     const fecha = ahora.toLocaleDateString();
     const hora = ahora.toLocaleTimeString();
     const offset = offsetRelojActual();
 
-    let sincroniza = '…';
-    let alertaReloj = false;
+    let desfase = 'sincronizando con el sistema…';
+    let alerta = false;
     if (offset !== null) {
         const segundos = Math.round(offset / 1000);
-        alertaReloj = Math.abs(segundos) >= 60;
-        sincroniza = `${alertaReloj ? '⚠' : ''}${segundos >= 0 ? '+' : ''}${segundos}s`;
-    }
-
-    let sic = '…';
-    let alertaSic = false;
-    if (currentStopId) {
-        if (ultimoPollExitosoMs === null) {
-            sic = 'esperando';
+        if (Math.abs(segundos) < 2) {
+            desfase = 'reloj del dispositivo sin desfase significativo';
         } else {
-            const segundosSic = Math.round((Date.now() - ultimoPollExitosoMs) / 1000);
-            alertaSic = segundosSic > (POLL_INTERVAL_MS / 1000) * 2; // mas de 2 ciclos sin respuesta nueva
-            sic = `${alertaSic ? '⚠' : ''}${segundosSic}s`;
+            const signo = segundos > 0 ? 'atrasado' : 'adelantado';
+            const abs = Math.abs(segundos);
+            const mins = Math.floor(abs / 60);
+            const secs = abs % 60;
+            const texto = mins > 0 ? `${mins} min ${secs} s` : `${secs} s`;
+            desfase = `dispositivo ${signo} ${texto} respecto al sistema`;
+            alerta = abs >= 60;
         }
     }
-
-    relojEstadoEl.textContent = `${fecha} ${hora} - Sincroniza: ${sincroniza} · SIC: ${sic}`;
-    relojEstadoEl.classList.toggle('alerta', alertaReloj || alertaSic);
+    relojEstadoEl.textContent = `${fecha} ${hora} (hora del sistema) · ${desfase}`;
+    relojEstadoEl.classList.toggle('alerta', alerta);
 }
 
 setInterval(actualizarRelojUI, 1000);
@@ -317,11 +306,35 @@ sessionTimerBannerEl.addEventListener('click', () => sessionTimerBannerEl.classL
 
 setInterval(actualizarContadorSesion, 1000);
 
+// Indicador de qué tan fresca está la última respuesta real del SIC -- independiente del reloj
+// de arriba, que solo calcula hora local y sigue "corriendo" aunque el polling lleve minutos
+// muerto (ver acta: el reloj no es prueba de que el polling esté vivo).
+function actualizarPollEstadoUI() {
+    if (!currentStopId) {
+        pollEstadoEl.textContent = '';
+        pollEstadoEl.classList.remove('alerta');
+        return;
+    }
+    if (ultimoPollExitosoMs === null) {
+        pollEstadoEl.textContent = 'datos del SIC: esperando primera respuesta…';
+        pollEstadoEl.classList.remove('alerta');
+        return;
+    }
+    const segundos = Math.round((Date.now() - ultimoPollExitosoMs) / 1000);
+    const alerta = segundos > (POLL_INTERVAL_MS / 1000) * 2; // más de 2 ciclos sin respuesta nueva
+    pollEstadoEl.textContent = alerta
+        ? `⚠ datos del SIC desactualizados hace ${segundos}s — revisa pantalla/conexión`
+        : `datos del SIC actualizados hace ${segundos}s`;
+    pollEstadoEl.classList.toggle('alerta', alerta);
+}
+
+setInterval(actualizarPollEstadoUI, 1000);
+
 // --- wake lock: evita que la pantalla se apague SOLA por inactividad mientras hay captura
 // activa. No evita que el usuario la bloquee a propósito con el botón de encendido -- eso el
 // sistema operativo nunca lo permite bloquear desde una página web. Por eso sigue siendo
-// necesario el indicador de arriba (actualizarRelojUI, parte "SIC:"): el wake lock reduce un
-// caso, no todos. Se libera solo cuando el documento pierde visibilidad, así que hay que volver a
+// necesario el indicador de arriba (actualizarPollEstadoUI): el wake lock reduce un caso, no
+// todos. Se libera solo cuando el documento pierde visibilidad, así que hay que volver a
 // pedirlo cuando vuelve a estar visible.
 async function solicitarWakeLock() {
     if (!session || !('wakeLock' in navigator)) return;
@@ -474,10 +487,7 @@ async function actualizarSeguimientoVehiculos(rows, stopId, now) {
                 route: row.route,
                 destination: row.destination,
                 lastSeenMs: now,
-                distanciaMetros: previo ? previo.distanciaMetros : null,
-                // v2 (2026-11-17): antes/despues de la estacion, ver mas abajo donde se actualiza.
-                distanciaMinima: previo ? previo.distanciaMinima : null,
-                arribado: previo ? previo.arribado : false
+                distanciaMetros: previo ? previo.distanciaMetros : null
             };
         }
     }
@@ -498,18 +508,6 @@ async function actualizarSeguimientoVehiculos(rows, stopId, now) {
         }
         if (!posBus) return; // SIUR sin tarea/posición para este vehículo en este ciclo
         const metros = Math.round(haversineMetros(posBus.lat, posBus.lon, coords.lat, coords.lon));
-        // v2 (2026-11-17): antes/despues de la estacion -- mismo truco ya probado en
-        // PRUEBAS/seguir_bus.py: mientras la lectura no supere el minimo visto hasta ahora para
-        // este vehiculo, sigue acercandose (antes); en cuanto lo supera, ya paso (despues). Puede
-        // volver a "antes" si vuelve a bajar del minimo, igual que el script de pruebas -- en la
-        // practica un bus no deberia devolverse hacia la estacion, pero no se fuerza a que la
-        // bandera quede pegada para siempre.
-        if (entry.distanciaMinima === null || metros <= entry.distanciaMinima) {
-            entry.distanciaMinima = metros;
-            entry.arribado = false;
-        } else {
-            entry.arribado = true;
-        }
         entry.distanciaMetros = metros;
         distanciaPorVehiculo[vehicleRaw] = metros;
     }));
@@ -519,7 +517,6 @@ async function actualizarSeguimientoVehiculos(rows, stopId, now) {
         for (const slot of slotsConVehiculo(row, incluirPendientes)) {
             const entry = seguimientoVehiculos[slot.vehicleRaw];
             slot.distanciaMetros = entry ? entry.distanciaMetros : null;
-            slot.distanciaArribado = entry ? entry.arribado : false;
         }
     }
     return distanciaPorVehiculo;
@@ -537,7 +534,13 @@ function gpsDiscrepaDeSic(slot, esPasado, now) {
     return Math.abs(minutosSic - slot.etaGpsMin) > TOLERANCIA_DISCREPANCIA_MIN;
 }
 
-// Minutos de buses_proximos_a_llegar.php, sin ningún prefijo --
+function renderGpsTexto(slot, esPasado, now) {
+    if (!slot || slot.etaGpsMin === null || slot.etaGpsMin === undefined) return '';
+    const discrepa = gpsDiscrepaDeSic(slot, esPasado, now);
+    return `<small class="gps-eta${discrepa ? ' discrepa' : ''}">GPS: ${slot.etaGpsMin} min</small>`;
+}
+
+// Mismo dato que renderGpsTexto (minutos de buses_proximos_a_llegar.php), sin el prefijo "GPS:" --
 // para Pendientes, donde el usuario pidió el valor plano, sin ninguna palabra calificadora.
 function renderTiempoPlano(slot, esPasado, now) {
     if (!slot || slot.etaGpsMin === null || slot.etaGpsMin === undefined) return '';
@@ -545,32 +548,13 @@ function renderTiempoPlano(slot, esPasado, now) {
     return `<small class="gps-eta${discrepa ? ' discrepa' : ''}">${slot.etaGpsMin} min</small>`;
 }
 
-// v2 (2026-11-17): el signo reemplaza la virgulilla ("~") -- "-" mientras se acerca (antes de la
-// estación, ver distanciaArribado en actualizarSeguimientoVehiculos), "+" en cuanto ya pasó el
-// mínimo (después). Se quita la aclaración "en línea recta" -- ya se sabe, sobra en una pantalla
-// chica con ahora cuatro columnas.
-function renderDistTexto(slot) {
+function renderDistTexto(slot, compacta) {
     const d = slot?.distanciaMetros;
     if (d === null || d === undefined) return '';
-    const signo = slot.distanciaArribado ? '+' : '-';
-    const texto = d >= 1000 ? `${signo}${(d / 1000).toFixed(1)} km` : `${signo}${d} m`;
+    const texto = d >= 1000 ? `~${(d / 1000).toFixed(1)} km` : `~${d} m`;
     const llego = d <= UMBRAL_LLEGADA_M;
-    return `<small class="dist-gps${llego ? ' llego' : ''}">${texto}</small>`;
-}
-
-// v2 (2026-11-17): "Próxima Llegada 2" -- tiempo calculado SOLO de la distancia GPS (ver
-// METROS_POR_MINUTO_CALCULADO), independiente de la hora que da el SIC (Próxima Llegada 1) y del
-// conteo que da SIUR (que ya no se muestra ahí). Mismos estados visuales que formatearTiempo
-// (logic.js) para no inventar colores nuevos: "pasado" si ya arribó según la bandera de
-// distanciaArribado, "llegando" si está bajo el umbral de llegada, "futuro" en otro caso.
-function formatearTiempoCalculado(slot) {
-    const d = slot?.distanciaMetros;
-    if (d === null || d === undefined) return { texto: '---', estado: 'sin-dato' };
-    const minutos = Math.round(d / METROS_POR_MINUTO_CALCULADO);
-    const texto = minutos <= 0 ? '< 1 min' : `${minutos} min`;
-    if (slot.distanciaArribado) return { texto, estado: 'pasado' };
-    if (d <= UMBRAL_LLEGADA_M) return { texto: 'LLEGANDO', estado: 'llegando' };
-    return { texto, estado: 'futuro' };
+    const sufijo = compacta ? '' : ' en línea recta';
+    return `<small class="dist-gps${llego ? ' llego' : ''}">${texto}${sufijo}</small>`;
 }
 
 // v2: seguro contra ciclos de sondeo superpuestos -- si un ciclo (fetchStopMessages + SIUR +
@@ -745,7 +729,7 @@ function renderPendientes(r, now) {
         // esos 5 no hay tiempo. La distancia sale de bus.php (fuente "3", lat/lon) vía
         // seguimientoVehiculos. Sin palabras como "GPS" o "hace" -- solo el numero.
         const tiempoTexto = renderTiempoPlano(p, true, now);
-        const distTexto = renderDistTexto(p);
+        const distTexto = renderDistTexto(p, true);
         const sinDato = (!tiempoTexto && !distTexto) ? '<small class="muted">sin dato de SIUR</small>' : '';
         return `<div class="pendiente-item"><span class="pend-id">${id}</span>${tiempoTexto}${distTexto}${sinDato}<button class="btn-auditar-pendiente" data-route="${r.route}" data-destino="${r.destination}" data-trip="${p.tripId}">Auditar</button></div>`;
     }).join('');
@@ -760,15 +744,7 @@ function renderizarCards(rows) {
     }
     const now = ahoraSincronizado();
     cardsEl.innerHTML = rows.map(r => {
-        // v2 (2026-11-17): Próxima Llegada 1 (hora del SIC) y 2 (calculada por distancia GPS, ver
-        // formatearTiempoCalculado) son SIEMPRE el mismo bus -- el que el SIC tiene como próximo
-        // para esta ruta (r.nextArrival). No se elige otro bus por GPS: así se puede comparar de
-        // verdad hora-contra-hora del mismo viaje. Se quitó "GPS: X min" (renderGpsTexto) de la
-        // columna 1 -- ese dato de SIUR ahora solo se usa en Pendientes.
         const next = formatearTiempo(r.nextArrival?.eta ?? null, now, false);
-        const calculado = formatearTiempoCalculado(r.nextArrival);
-        const vehiculoTexto = renderVehiculoSlot(r.nextArrival);
-        const distTexto = renderDistTexto(r.nextArrival);
         return `
         <div class="card-ruta">
             <div class="card-header">
@@ -778,8 +754,7 @@ function renderizarCards(rows) {
             </div>
             <div class="card-tiempos">
                 <div class="tiempo-col"><label>Última Atención</label>${renderUltimaAtencion(r, now)}</div>
-                <div class="tiempo-col"><label>Próx. 1 (SIC)</label><span class="${next.estado}">${next.texto}</span>${vehiculoTexto}${distTexto}</div>
-                <div class="tiempo-col"><label>Próx. 2 (GPS)</label><span class="${calculado.estado}">${calculado.texto}</span>${vehiculoTexto}${distTexto}</div>
+                <div class="tiempo-col"><label>Próxima Llegada</label><span class="${next.estado}">${next.texto}</span>${renderVehiculoSlot(r.nextArrival)}${renderGpsTexto(r.nextArrival, false, now)}${renderDistTexto(r.nextArrival)}</div>
                 <div class="tiempo-col pendientes-col"><label>Pendientes</label>${renderPendientes(r, now)}</div>
             </div>
         </div>`;
@@ -814,8 +789,7 @@ function seleccionarParaAuditar(route, destination) {
         route, destination,
         tripId: fila.nextArrival.tripId,
         vehicleMc: fila.nextArrival.vehicleMc,
-        marcada: {},
-        esPendiente: false // v2: solo se puede "Ocultar" un bus que ya está en el backlog de pendientes
+        marcada: {}
     };
     renderizarAuditoria();
     cambiarTab('auditoria');
@@ -842,8 +816,7 @@ function seleccionarPendienteParaAuditar(route, destination, tripId) {
         route, destination,
         tripId: item.tripId,
         vehicleMc: item.vehicleMc,
-        marcada: {},
-        esPendiente: true
+        marcada: {}
     };
     renderizarAuditoria();
     cambiarTab('auditoria');
@@ -882,10 +855,6 @@ function renderizarAuditoria() {
     auditEmptyEl.classList.add('hidden');
     auditCardEl.classList.remove('hidden');
     auditButtonsEl.classList.remove('hidden');
-    // v2: "Ocultar" solo tiene sentido para un bus que ya está en el backlog de pendientes (ver
-    // seleccionarPendienteParaAuditar) -- antes de eso el bus todavía puede llegar normal, no hay
-    // nada que ocultar (acordado con el usuario 2026-11-17).
-    btnOcultarPendiente.classList.toggle('hidden', !auditSeleccion.esPendiente);
     auditCardEl.innerHTML = `
         <div class="card-header">
             <span class="route-badge">${auditSeleccion.route}</span>
@@ -968,24 +937,6 @@ btnGuardarBusFisico.addEventListener('click', () => {
     busFisicoWrapEl.classList.add('hidden');
     numeroBusFisicoInput.value = '';
     actualizarResumenMarcas();
-});
-
-// v2 (2026-11-17): oculta un bus del backlog de "pendientes de captura" cuando es puro ruido --
-// típicamente un bus varado (el operador no lo saca de la tarea y sigue dando señal, a veces a
-// varios km de la estación) o uno del que SIUR nunca dio ningún dato. Deja rastro en el CSV a
-// propósito (no borra nada): ese bus sigue siendo responsabilidad del operador y puede ser base
-// de un memorando, según el usuario.
-btnOcultarPendiente.addEventListener('click', () => {
-    if (!auditSeleccion || !session) return;
-    if (!confirm('¿Ocultar este bus de la lista de pendientes? No se borra nada: queda una fila en el CSV con el motivo, por si sirve de base para un memorando al operador.')) return;
-    const fila = construirFilaAuditoria('AUDITORIA_OCULTO');
-    agregarFilasConLimite([fila]);
-    if (auditSeleccion.tripId !== null && auditSeleccion.tripId !== undefined) {
-        tripsAuditados.add(String(auditSeleccion.tripId)); // mismo mecanismo que btnMarcarHora para salir del backlog
-    }
-    auditSeleccion = null;
-    renderizarAuditoria();
-    cambiarTab('principal');
 });
 
 // --- bus sorpresa: llega un bus en una ruta vigilada, pero su ID no corresponde a ninguno de
