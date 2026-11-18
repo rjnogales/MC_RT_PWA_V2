@@ -44,7 +44,12 @@ html, body {
     background: var(--ok);
     color: white;
     font-weight: bold;
-    min-height: 44px;
+    /* v2 (2026-11-17): mas chico a proposito para que quepa en la misma linea que los selects
+       de estacion/plataforma -- antes, con 44px de alto y su padding, se iba a su propia linea. */
+    min-height: 36px;
+    padding: 6px 10px;
+    font-size: 0.85rem;
+    flex-shrink: 0;
 }
 
 #toggleSessionBtn.activa {
@@ -64,18 +69,6 @@ html, body {
 }
 
 .reloj-estado.alerta {
-    color: var(--warn);
-    font-weight: bold;
-    opacity: 1;
-}
-
-.poll-estado {
-    font-size: 0.8rem;
-    margin-top: 2px;
-    opacity: 0.9;
-}
-
-.poll-estado.alerta {
     color: var(--warn);
     font-weight: bold;
     opacity: 1;
@@ -127,7 +120,7 @@ html, body {
     border-radius: 6px 6px 0 0;
     background: rgba(255,255,255,0.3);
     color: white;
-    font-weight: bold;
+    font-weight: 400; /* v2 (2026-11-17): mas delgado, antes bold */
     min-height: 44px;
 }
 
@@ -190,32 +183,34 @@ main {
 
 .card-tiempos {
     display: flex;
-    gap: 10px;
+    gap: 4px;
 }
 
 .tiempo-col {
     flex: 1;
     text-align: center;
     border-left: 1px solid #eee;
-    padding: 4px 6px;
+    padding: 3px 3px;
 }
 
+/* v2 (2026-11-17): fuentes mas chicas en toda la columna -- ahora son 4 columnas (se agrego
+   "Proxima Llegada 2"), antes eran 3 con estos mismos tamanos. */
 .tiempo-col label {
     display: block;
-    font-size: 0.7rem;
+    font-size: 0.58rem;
     color: #777;
     text-transform: uppercase;
 }
 
 .tiempo-col span {
     display: block;
-    font-size: 1.3rem;
+    font-size: 1.05rem;
     font-weight: bold;
 }
 
 .tiempo-col small {
     display: block;
-    font-size: 0.75rem;
+    font-size: 0.68rem;
     color: #999;
 }
 
@@ -231,7 +226,7 @@ main {
 .tiempo-col small.dist-gps.llego { color: var(--no); }
 
 /* v2: lista con scroll de buses pendientes (reemplaza la columna "Siguiente") */
-.pendientes-col { flex: 1.3; }
+.pendientes-col { flex: 1.1; } /* v2 (2026-11-17): antes 1.3 -- ahora compite con 4 columnas, no 3 */
 .pendientes-list {
     max-height: 150px;
     overflow-y: auto;
@@ -240,10 +235,10 @@ main {
 .pendiente-item {
     display: flex;
     align-items: baseline;
-    gap: 6px;
+    gap: 4px;
     padding: 3px 2px;
     border-bottom: 1px solid #f0f0f0;
-    font-size: 0.78rem;
+    font-size: 0.72rem;
 }
 .pendiente-item .pend-tiempo { font-weight: bold; min-width: 3.2em; }
 .pendiente-item .pend-tiempo.pasado { color: #e07a9b; }
