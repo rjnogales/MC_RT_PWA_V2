@@ -525,24 +525,27 @@ async function actualizarSeguimientoVehiculos(rows, stopId, now) {
 
 // v2 (2026-11-17, usuario: "con la distancia tengo"): en Pendientes ya no se usa el conteo de
 // SIUR (buses_proximos_a_llegar.php) -- se reemplaza por este mismo cálculo de
-// METROS_POR_MINUTO_CALCULADO que ya se usa en renderDistTexto para distancias largas, sin
-// ninguna palabra calificadora (mismo criterio ya acordado antes: solo el número).
+// METROS_POR_MINUTO_CALCULADO que ya se usa en renderDistTexto para distancias largas.
+// v2 (2026-11-18, usuario, para una presentación): se agregan los metros de vuelta junto con
+// los minutos -- antes solo se mostraba el minuto calculado.
 function renderTiempoPorDistancia(slot) {
     const d = slot?.distanciaMetros;
     if (d === null || d === undefined) return '';
-    return `<small class="dist-gps">${Math.round(d / METROS_POR_MINUTO_CALCULADO)} min</small>`;
+    const min = Math.round(d / METROS_POR_MINUTO_CALCULADO);
+    return `<small class="dist-gps">${d} m · ${min} min</small>`;
 }
 
 // v2 (2026-11-17): se quita la aclaración "en línea recta" -- sigue siendo línea recta (ver
 // §3 del acta), solo que ya no hace falta decirlo en una pantalla chica de celular.
 // v2 (2026-11-17, usuario): donde antes se mostraban los km para distancias largas, ahora se
-// muestra el resultado entero de dividir la distancia por METROS_POR_MINUTO_CALCULADO -- el
-// usuario pidió quitar el km y poner directo esa división (misma idea de "1 min por cada 150 m"
-// que ya se había planteado antes, acá solo para las distancias largas donde antes salía el km).
+// muestra el resultado entero de dividir la distancia por METROS_POR_MINUTO_CALCULADO.
+// v2 (2026-11-18, usuario, para una presentación): se muestran metros Y minutos juntos siempre
+// (antes, distancias >=1000 m solo mostraban el minuto calculado, <1000 m solo los metros).
 function renderDistTexto(slot) {
     const d = slot?.distanciaMetros;
     if (d === null || d === undefined) return '';
-    const texto = d >= 1000 ? `~${Math.round(d / METROS_POR_MINUTO_CALCULADO)} min` : `~${d} m`;
+    const min = Math.round(d / METROS_POR_MINUTO_CALCULADO);
+    const texto = `~${d} m · ~${min} min`;
     const llego = d <= UMBRAL_LLEGADA_M;
     return `<small class="dist-gps${llego ? ' llego' : ''}">${texto}</small>`;
 }
