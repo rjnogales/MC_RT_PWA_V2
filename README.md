@@ -56,3 +56,4 @@ Conceptos (fantasma, sorpresa, fuentes de datos, filtro de grabación, reloj sin
 - `js/storage.js`: archivo de sesiones en `localStorage` (clave `sic_audit_sessions_archive_v1`), lista "Sesiones guardadas en este dispositivo" para descarga diferida.
 - Una sesión queda ligada a una sola estación (selector bloqueado mientras hay sesión activa); sí se puede cambiar de plataforma dentro de ella.
 - A diferencia del kiosco oficial, esta app nunca descarta una predicción por no tener ETA o vehículo resuelto — todo se registra (sujeto al filtro del acta §4).
+- **v2 (2026-11-17):** desde Pendientes, auditando un bus del backlog aparece un botón "Ocultar" para los que son puro ruido (varado o sin dato de SIUR) — no borra nada, deja una fila `AUDITORIA_OCULTO` en el CSV. Se quitó "en línea recta" de los textos de distancia (sigue siendo línea recta, solo ya no se aclara) para ganar espacio en pantallas chicas.

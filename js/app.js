@@ -69,6 +69,7 @@ const btnIdentidadNo = document.getElementById('btnIdentidadNo');
 const busFisicoWrapEl = document.getElementById('busFisicoWrap');
 const numeroBusFisicoInput = document.getElementById('numeroBusFisico');
 const btnGuardarBusFisico = document.getElementById('btnGuardarBusFisico');
+const btnOcultarPendiente = document.getElementById('btnOcultarPendiente');
 const btnVolverMonitoreo = document.getElementById('btnVolverMonitoreo');
 const startSessionDialog = document.getElementById('startSessionDialog');
 const startSessionForm = document.getElementById('startSessionForm');
@@ -548,13 +549,14 @@ function renderTiempoPlano(slot, esPasado, now) {
     return `<small class="gps-eta${discrepa ? ' discrepa' : ''}">${slot.etaGpsMin} min</small>`;
 }
 
-function renderDistTexto(slot, compacta) {
+// v2 (2026-11-17): se quita la aclaración "en línea recta" -- sigue siendo línea recta (ver
+// §3 del acta), solo que ya no hace falta decirlo en una pantalla chica de celular.
+function renderDistTexto(slot) {
     const d = slot?.distanciaMetros;
     if (d === null || d === undefined) return '';
     const texto = d >= 1000 ? `~${(d / 1000).toFixed(1)} km` : `~${d} m`;
     const llego = d <= UMBRAL_LLEGADA_M;
-    const sufijo = compacta ? '' : ' en línea recta';
-    return `<small class="dist-gps${llego ? ' llego' : ''}">${texto}${sufijo}</small>`;
+    return `<small class="dist-gps${llego ? ' llego' : ''}">${texto}</small>`;
 }
 
 // v2: seguro contra ciclos de sondeo superpuestos -- si un ciclo (fetchStopMessages + SIUR +
@@ -729,7 +731,7 @@ function renderPendientes(r, now) {
         // esos 5 no hay tiempo. La distancia sale de bus.php (fuente "3", lat/lon) vía
         // seguimientoVehiculos. Sin palabras como "GPS" o "hace" -- solo el numero.
         const tiempoTexto = renderTiempoPlano(p, true, now);
-        const distTexto = renderDistTexto(p, true);
+        const distTexto = renderDistTexto(p);
         const sinDato = (!tiempoTexto && !distTexto) ? '<small class="muted">sin dato de SIUR</small>' : '';
         return `<div class="pendiente-item"><span class="pend-id">${id}</span>${tiempoTexto}${distTexto}${sinDato}<button class="btn-auditar-pendiente" data-route="${r.route}" data-destino="${r.destination}" data-trip="${p.tripId}">Auditar</button></div>`;
     }).join('');
@@ -789,7 +791,8 @@ function seleccionarParaAuditar(route, destination) {
         route, destination,
         tripId: fila.nextArrival.tripId,
         vehicleMc: fila.nextArrival.vehicleMc,
-        marcada: {}
+        marcada: {},
+        esPendiente: false // v2: solo se puede "Ocultar" un bus que ya está en el backlog de pendientes
     };
     renderizarAuditoria();
     cambiarTab('auditoria');
@@ -816,7 +819,8 @@ function seleccionarPendienteParaAuditar(route, destination, tripId) {
         route, destination,
         tripId: item.tripId,
         vehicleMc: item.vehicleMc,
-        marcada: {}
+        marcada: {},
+        esPendiente: true
     };
     renderizarAuditoria();
     cambiarTab('auditoria');
@@ -855,6 +859,9 @@ function renderizarAuditoria() {
     auditEmptyEl.classList.add('hidden');
     auditCardEl.classList.remove('hidden');
     auditButtonsEl.classList.remove('hidden');
+    // v2: "Ocultar" solo tiene sentido para un bus que ya está en el backlog de pendientes (ver
+    // seleccionarPendienteParaAuditar) -- antes de eso el bus todavía puede llegar normal.
+    btnOcultarPendiente.classList.toggle('hidden', !auditSeleccion.esPendiente);
     auditCardEl.innerHTML = `
         <div class="card-header">
             <span class="route-badge">${auditSeleccion.route}</span>
@@ -937,6 +944,24 @@ btnGuardarBusFisico.addEventListener('click', () => {
     busFisicoWrapEl.classList.add('hidden');
     numeroBusFisicoInput.value = '';
     actualizarResumenMarcas();
+});
+
+// v2 (2026-11-17): oculta un bus del backlog de "pendientes de captura" cuando es puro ruido --
+// típicamente un bus varado (el operador no lo saca de la tarea y sigue dando señal, a veces a
+// varios km de la estación) o uno del que SIUR nunca dio ningún dato. Deja rastro en el CSV a
+// propósito (no borra nada): ese bus sigue siendo responsabilidad del operador y puede ser base
+// de un memorando, según el usuario.
+btnOcultarPendiente.addEventListener('click', () => {
+    if (!auditSeleccion || !session) return;
+    if (!confirm('¿Ocultar este bus de la lista de pendientes? No se borra nada: queda una fila en el CSV con el motivo, por si sirve de base para un memorando al operador.')) return;
+    const fila = construirFilaAuditoria('AUDITORIA_OCULTO');
+    agregarFilasConLimite([fila]);
+    if (auditSeleccion.tripId !== null && auditSeleccion.tripId !== undefined) {
+        tripsAuditados.add(String(auditSeleccion.tripId)); // mismo mecanismo que btnMarcarHora para salir del backlog
+    }
+    auditSeleccion = null;
+    renderizarAuditoria();
+    cambiarTab('principal');
 });
 
 // --- bus sorpresa: llega un bus en una ruta vigilada, pero su ID no corresponde a ninguno de
