@@ -10,6 +10,10 @@ const SESSION_WARN_MAX_MIN = 180; // tope de avisos -- de ahí en adelante el co
 // distancia en línea recta se pinta rojo ("ya está en la ventana de llegada"), no es un valor
 // nuevo inventado para el PWA.
 const UMBRAL_LLEGADA_M = 100;
+// v2 (2026-11-17): para distancias largas (donde antes se mostraba el km), el usuario pidió
+// mostrar directo el resultado entero de dividir por esto -- 1 "unidad" cada 150 m (ver
+// renderDistTexto).
+const METROS_POR_MINUTO_CALCULADO = 150;
 // Tolerancia al comparar el conteo de SIUR (GPS: X min) contra el conteo propio del SIC: el
 // redondeo de SIUR a minutos enteros ya mete ±1 min de ruido normal (ver acta §3), así que solo
 // se marca en rojo si la diferencia supera eso.
@@ -535,13 +539,7 @@ function gpsDiscrepaDeSic(slot, esPasado, now) {
     return Math.abs(minutosSic - slot.etaGpsMin) > TOLERANCIA_DISCREPANCIA_MIN;
 }
 
-function renderGpsTexto(slot, esPasado, now) {
-    if (!slot || slot.etaGpsMin === null || slot.etaGpsMin === undefined) return '';
-    const discrepa = gpsDiscrepaDeSic(slot, esPasado, now);
-    return `<small class="gps-eta${discrepa ? ' discrepa' : ''}">GPS: ${slot.etaGpsMin} min</small>`;
-}
-
-// Mismo dato que renderGpsTexto (minutos de buses_proximos_a_llegar.php), sin el prefijo "GPS:" --
+// Minutos de buses_proximos_a_llegar.php (SIUR), sin ningún prefijo --
 // para Pendientes, donde el usuario pidió el valor plano, sin ninguna palabra calificadora.
 function renderTiempoPlano(slot, esPasado, now) {
     if (!slot || slot.etaGpsMin === null || slot.etaGpsMin === undefined) return '';
@@ -551,10 +549,14 @@ function renderTiempoPlano(slot, esPasado, now) {
 
 // v2 (2026-11-17): se quita la aclaración "en línea recta" -- sigue siendo línea recta (ver
 // §3 del acta), solo que ya no hace falta decirlo en una pantalla chica de celular.
+// v2 (2026-11-17, usuario): donde antes se mostraban los km para distancias largas, ahora se
+// muestra el resultado entero de dividir la distancia por METROS_POR_MINUTO_CALCULADO -- el
+// usuario pidió quitar el km y poner directo esa división (misma idea de "1 min por cada 150 m"
+// que ya se había planteado antes, acá solo para las distancias largas donde antes salía el km).
 function renderDistTexto(slot) {
     const d = slot?.distanciaMetros;
     if (d === null || d === undefined) return '';
-    const texto = d >= 1000 ? `~${(d / 1000).toFixed(1)} km` : `~${d} m`;
+    const texto = d >= 1000 ? `~${Math.round(d / METROS_POR_MINUTO_CALCULADO)} min` : `~${d} m`;
     const llego = d <= UMBRAL_LLEGADA_M;
     return `<small class="dist-gps${llego ? ' llego' : ''}">${texto}</small>`;
 }
@@ -756,7 +758,7 @@ function renderizarCards(rows) {
             </div>
             <div class="card-tiempos">
                 <div class="tiempo-col"><label>Última Atención</label>${renderUltimaAtencion(r, now)}</div>
-                <div class="tiempo-col"><label>Próxima Llegada</label><span class="${next.estado}">${next.texto}</span>${renderVehiculoSlot(r.nextArrival)}${renderGpsTexto(r.nextArrival, false, now)}${renderDistTexto(r.nextArrival)}</div>
+                <div class="tiempo-col"><label>Próxima Llegada</label><span class="${next.estado}">${next.texto}</span>${renderVehiculoSlot(r.nextArrival)}${renderDistTexto(r.nextArrival)}</div>
                 <div class="tiempo-col pendientes-col"><label>Pendientes</label>${renderPendientes(r, now)}</div>
             </div>
         </div>`;
