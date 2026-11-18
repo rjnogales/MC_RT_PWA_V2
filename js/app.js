@@ -14,10 +14,6 @@ const UMBRAL_LLEGADA_M = 100;
 // mostrar directo el resultado entero de dividir por esto -- 1 "unidad" cada 150 m (ver
 // renderDistTexto).
 const METROS_POR_MINUTO_CALCULADO = 150;
-// Tolerancia al comparar el conteo de SIUR (GPS: X min) contra el conteo propio del SIC: el
-// redondeo de SIUR a minutos enteros ya mete ±1 min de ruido normal (ver acta §3), así que solo
-// se marca en rojo si la diferencia supera eso.
-const TOLERANCIA_DISCREPANCIA_MIN = 1;
 // Si un vehículo lleva más de esto sin aparecer en ninguna predicción tipo 1, se deja de pedirle
 // posición a SIUR (ver actualizarSeguimientoVehiculos) -- evita que el mapa de seguimiento crezca
 // sin límite en una sesión larga.
@@ -527,24 +523,14 @@ async function actualizarSeguimientoVehiculos(rows, stopId, now) {
     return distanciaPorVehiculo;
 }
 
-// ¿El conteo de SIUR (GPS: X min) se separa del que ya calcula el propio SIC para este slot?
-// - Slot futuro (Próxima Llegada): se comparan los minutos restantes de ambos.
-// - Slots pasados (Última Atención, y cada bus de la lista de pendientes de captura -- el SIC ya
-//   los dio por llegados): cualquier conteo de SIUR mayor a la tolerancia es una contradicción
-//   real ("SIUR dice que todavía faltan X min" cuando el SIC ya pasó ese bus a "llegado").
-function gpsDiscrepaDeSic(slot, esPasado, now) {
-    if (!slot || slot.etaGpsMin === null || slot.etaGpsMin === undefined) return false;
-    if (esPasado) return slot.etaGpsMin > TOLERANCIA_DISCREPANCIA_MIN;
-    const minutosSic = Math.round((slot.eta - now) / 60000);
-    return Math.abs(minutosSic - slot.etaGpsMin) > TOLERANCIA_DISCREPANCIA_MIN;
-}
-
-// Minutos de buses_proximos_a_llegar.php (SIUR), sin ningún prefijo --
-// para Pendientes, donde el usuario pidió el valor plano, sin ninguna palabra calificadora.
-function renderTiempoPlano(slot, esPasado, now) {
-    if (!slot || slot.etaGpsMin === null || slot.etaGpsMin === undefined) return '';
-    const discrepa = gpsDiscrepaDeSic(slot, esPasado, now);
-    return `<small class="gps-eta${discrepa ? ' discrepa' : ''}">${slot.etaGpsMin} min</small>`;
+// v2 (2026-11-17, usuario: "con la distancia tengo"): en Pendientes ya no se usa el conteo de
+// SIUR (buses_proximos_a_llegar.php) -- se reemplaza por este mismo cálculo de
+// METROS_POR_MINUTO_CALCULADO que ya se usa en renderDistTexto para distancias largas, sin
+// ninguna palabra calificadora (mismo criterio ya acordado antes: solo el número).
+function renderTiempoPorDistancia(slot) {
+    const d = slot?.distanciaMetros;
+    if (d === null || d === undefined) return '';
+    return `<small class="dist-gps">${Math.round(d / METROS_POR_MINUTO_CALCULADO)} min</small>`;
 }
 
 // v2 (2026-11-17): se quita la aclaración "en línea recta" -- sigue siendo línea recta (ver
@@ -621,15 +607,6 @@ async function pollTickInterno() {
     const { predicciones, alertas } = extraerPredicciones(mensajesValidos);
     const caches = session ? session.caches : monitorCaches;
     currentPlatformRows = agruparPrediccionesPorRuta(predicciones, currentStopId, now, caches);
-    // v2: el conteo de SIUR se anexa a TODOS los slots con vehículo (Última Atención, Próxima
-    // Llegada y el backlog de pendientes de captura), no solo a Próxima Llegada -- así se puede
-    // comparar contra el SIC en cualquiera de los tres.
-    for (const row of currentPlatformRows) {
-        for (const slot of slotsConVehiculo(row, !!session)) {
-            const minutos = gpsPorVehiculo[slot.vehicleRaw];
-            slot.etaGpsMin = (minutos !== undefined) ? minutos : null;
-        }
-    }
     // Distancia (línea recta) de cada vehículo en seguimiento a la parada -- se calcula acá,
     // antes de armar las filas del CSV, para poder anexarla a las filas de este mismo ciclo.
     const distanciaPorVehiculo = await actualizarSeguimientoVehiculos(currentPlatformRows, currentStopId, now);
@@ -727,12 +704,11 @@ function renderPendientes(r, now) {
         const id = p.vehicleMc;
         // Lo único útil en campo es esto: ¿se está acercando de verdad o no? "hace cuánto el SIC
         // lo descartó" no sirve para nada en vivo (ya queda en el CSV para analizar después, ver
-        // usuario 2026-11-17) -- lo que importa es el tiempo/distancia que SIUR da AHORA, los dos
-        // juntos, no uno reemplazando al otro: el tiempo sale de buses_proximos_a_llegar.php
-        // (fuente "1"), solo para los 5 buses mas cercanos a la parada -- si este no esta entre
-        // esos 5 no hay tiempo. La distancia sale de bus.php (fuente "3", lat/lon) vía
-        // seguimientoVehiculos. Sin palabras como "GPS" o "hace" -- solo el numero.
-        const tiempoTexto = renderTiempoPlano(p, true, now);
+        // usuario 2026-11-17). v2 (2026-11-17, usuario: "con la distancia tengo"): se quitó el
+        // conteo de SIUR (buses_proximos_a_llegar.php) de acá -- ahora es solo lo que da
+        // bus.php/seguimientoVehiculos: la distancia y, calculado de la misma, un tiempo
+        // (METROS_POR_MINUTO_CALCULADO). Sin palabras como "GPS" o "hace" -- solo el numero.
+        const tiempoTexto = renderTiempoPorDistancia(p);
         const distTexto = renderDistTexto(p);
         const sinDato = (!tiempoTexto && !distTexto) ? '<small class="muted">sin dato de SIUR</small>' : '';
         return `<div class="pendiente-item"><span class="pend-id">${id}</span>${tiempoTexto}${distTexto}${sinDato}<button class="btn-auditar-pendiente" data-route="${r.route}" data-destino="${r.destination}" data-trip="${p.tripId}">Auditar</button></div>`;
